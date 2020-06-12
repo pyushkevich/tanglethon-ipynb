@@ -1,0 +1,6 @@
+[submodule "wildcat.pytorch"]
+	path = wildcat.pytorch
+	url = https://github.com/durandtibo/wildcat.pytorch.git
+[submodule "nissl_cluster/DeepSpectralClustering"]
+	path = nissl_cluster/DeepSpectralClustering
+	url = https://github.com/wlwkgus/DeepSpectralClustering.git
