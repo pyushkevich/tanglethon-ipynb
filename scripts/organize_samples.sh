@@ -102,11 +102,16 @@ else
 
     # Determine the class
     for ((i=0; i<$N_CLASSES; i++)); do
-      for pat in $(cat $LFILE | jq -r ".[$i].labels[]"); do
+
+      # Careful here: labels may have spaces
+      NPAT=$(jq -r ".[$i].labels | length" $LFILE)
+
+      for ((j=0; j<$NPAT; j++)); do
+        pat=$(jq -r ".[$i].labels[$j]" $LFILE)
         if [[ $LABEL =~ $pat ]]; then
           SAMPLE_CLASS=${CLASSES[i]}
           break
-        fi
+        fi 
       done
 
       if [[ $SAMPLE_CLASS ]]; then break; fi

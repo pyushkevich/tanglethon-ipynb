@@ -53,24 +53,37 @@ if [[ $(cat $RESPFILE | jq -r .status) != "ok" ]]; then
   exit 2
 fi
 
-# Download the manifest file
-curl -s -b $COOKIEFILE -o $OUTDIR/manifest.csv \
-  $SERVER/dltrain/api/task/$TASKID/samples/manifest.csv 
+# Raw and filtered manifest files
+MANI_RAW="$OUTDIR/manifest_server.csv"
+MANI_FLT="$OUTDIR/manifest.csv"
 
-# List unique specimens
-cat $OUTDIR/manifest.csv | awk -F, 'NR > 1 {print $12}' | sort -u \
-  > $OUTDIR/specimens.txt
+# Download the manifest file
+curl -s -b $COOKIEFILE -o "$MANI_RAW" \
+  $SERVER/dltrain/api/task/$TASKID/samples/manifest.csv 
 
 # Generate patches
 mkdir -p $OUTDIR/all_patches
 rm -rf $OUTDIR/all_patches/*
+rm -rf $MANI_FLT
 
-for id in $(cat $OUTDIR/manifest.csv | awk -F, 'NR > 1 {print $1}'); do
+while IFS= read -r line; do
 
-  curl -s -b $COOKIEFILE -o $OUTDIR/all_patches/${id}.png \
-    $SERVER/dltrain/api/sample/${id}/image.png          
+  # Get ID
+  id=$(echo $line | awk -F, '{print $1}')
+
+  # Download patch
+  PATCH="$OUTDIR/all_patches/${id}.png"
+  PURL="$SERVER/dltrain/api/sample/${id}/image.png"
+
+  curl -s -b $COOKIEFILE -o "$PATCH" "$PURL" && \
+    echo "downloaded $PATCH" && \
+    identify "$PATCH" && \
+    echo "$line" >> "$MANI_FLT"
 
   echo "cloned patch $id"
 
-done
+done < "$MANI_RAW"
 
+# List unique specimens
+cat "$MANI_FLT" | awk -F, 'NR > 1 {print $12}' | sort -u \
+  > $OUTDIR/specimens.txt
