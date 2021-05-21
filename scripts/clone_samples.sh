@@ -6,11 +6,14 @@ function usage()
     clone_samples: download training samples from a histoannot server
     usage:
       clone_samples.sh [options]
-    options:
+    required options:
       -s <url>    Server URL (default: https://histo.itksnap.org)
       -k <file>   Path to JSON file with your API key
       -t <int>    Task ID on the server
       -o <dir>    Output directory for the samples
+    additional options:
+      -P          Skip downloading patches (only gets manifest file)
+      -X          Download exact size patches (slower)
 USAGETEXT
 }
 
@@ -20,14 +23,16 @@ if [[ $# -lt 1 ]]; then
 fi
 
 SERVER="https://histo.itksnap.org"
-unset APIKEY TASKID OUTDIR
-while getopts "s:k:t:o:" opt; do
+unset APIKEY TASKID OUTDIR SKIPPATCHES EXACTPATCHES
+while getopts "s:k:t:o:PX" opt; do
   case $opt in
 
     s) SERVER=$OPTARG;;
     k) APIKEY=$OPTARG;;
     t) TASKID=$OPTARG;;
     o) OUTDIR=$OPTARG;;
+    P) SKIPPATCHES=1;;
+    X) EXACTPATCHES=1;;
     \?) echo "Unknown option $OPTARG"; exit 2;;
     :) echo "Option $OPTARG requires an argument"; exit 2;;
 
@@ -73,14 +78,35 @@ while IFS= read -r line; do
 
   # Download patch
   PATCH="$OUTDIR/all_patches/${id}.png"
-  PURL="$SERVER/dltrain/api/sample/${id}/image.png"
 
-  curl -s -b $COOKIEFILE -o "$PATCH" "$PURL" && \
-    echo "downloaded $PATCH" && \
-    identify "$PATCH" && \
+  if [[ $SKIPPATCHES -eq 1 ]]; then
+
     echo "$line" >> "$MANI_FLT"
 
-  echo "cloned patch $id"
+  elif [[ $EXACTPATCHES -eq 1 ]]; then
+
+    # Read the dimensions, in integers
+    DIMS=$(echo $line | awk -F, '{printf("%d_%d"), int($6), int($7)}')
+    PURL="$SERVER/dltrain/api/sample/${id}/0/image_${DIMS}.png"
+
+    curl -s -b $COOKIEFILE -o "$PATCH" "${PURL}" && \
+      echo "downloaded $PATCH" && \
+      identify "$PATCH" && \
+      echo "$line" >> "$MANI_FLT"
+
+    echo "cloned patch $id"
+
+  else
+
+    # Download default-size patch
+    PURL="$SERVER/dltrain/api/sample/${id}/image.png"
+    curl -s -b $COOKIEFILE -o "$PATCH" "$PURL" && \
+      echo "downloaded $PATCH" && \
+      identify "$PATCH" && \
+      echo "$line" >> "$MANI_FLT"
+
+    echo "cloned patch $id"
+  fi
 
 done < "$MANI_RAW"
 
