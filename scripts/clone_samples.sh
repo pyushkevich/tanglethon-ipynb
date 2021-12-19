@@ -17,6 +17,11 @@ function usage()
 USAGETEXT
 }
 
+function checkpng()
+{
+  $(dirname "${BASH_SOURCE[0]}")/checkpng.py $1
+}
+
 if [[ $# -lt 1 ]]; then
   usage
   exit 2
@@ -91,7 +96,7 @@ while IFS= read -r line; do
 
     curl -s -b $COOKIEFILE -o "$PATCH" "${PURL}" && \
       echo "downloaded $PATCH" && \
-      identify "$PATCH" && \
+      checkpng "$PATCH" && \
       echo "$line" >> "$MANI_FLT"
 
     echo "cloned patch $id"
@@ -102,7 +107,7 @@ while IFS= read -r line; do
     PURL="$SERVER/dltrain/api/sample/${id}/image.png"
     curl -s -b $COOKIEFILE -o "$PATCH" "$PURL" && \
       echo "downloaded $PATCH" && \
-      identify "$PATCH" && \
+      checkpng "$PATCH" && \
       echo "$line" >> "$MANI_FLT"
 
     echo "cloned patch $id"
