@@ -59,7 +59,7 @@ mkdir -p $OUTDIR
 # Login using the api key
 COOKIEFILE=$(mktemp /tmp/cookie.XXXXXX)
 RESPFILE=$(mktemp /tmp/response.XXXXXX)
-curl -s -c $COOKIEFILE -d api_key=$(cat $APIKEY | jq -r .api_key) \
+curl -sk -c $COOKIEFILE -d api_key=$(cat $APIKEY | jq -r .api_key) \
   $SERVER/auth/api/login -o $RESPFILE
 chmod 600 $COOKIEFILE
 
@@ -73,7 +73,7 @@ MANI_RAW="$OUTDIR/manifest_server.csv"
 MANI_FLT="$OUTDIR/manifest.csv"
 
 # Download the manifest file
-curl -s -b $COOKIEFILE -o "$MANI_RAW" \
+curl -sk -b $COOKIEFILE -o "$MANI_RAW" \
   $SERVER/dltrain/api/task/$TASKID/samples/manifest.csv 
 
 # Optionally process the raw file to limit to NMAX per class
@@ -120,7 +120,7 @@ while IFS= read -r line; do
     # Read the dimensions, in integers
     PURL="$SERVER/dltrain/api/sample/${id}/0/image_${w}_${h}.png"
 
-    curl -s -b $COOKIEFILE -o "$PATCH" "${PURL}" && \
+    curl -sk -b $COOKIEFILE -o "$PATCH" "${PURL}" && \
       echo "downloaded $PATCH" && \
       checkpng "$PATCH" && \
       echo "$line" >> "$MANI_FLT"
@@ -131,7 +131,7 @@ while IFS= read -r line; do
 
     # Download default-size patch
     PURL="$SERVER/dltrain/api/sample/${id}/image.png"
-    curl -s -b $COOKIEFILE -o "$PATCH" "$PURL" && \
+    curl -sk -b $COOKIEFILE -o "$PATCH" "$PURL" && \
       echo "downloaded $PATCH" && \
       checkpng "$PATCH" && \
       echo "$line" >> "$MANI_FLT"
