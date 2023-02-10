@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 import torch.nn.functional as F
+from wildcat.pooling import WildcatPool2d, ClassWisePool
 
 
 ### 
@@ -395,7 +396,6 @@ class UNet(nn.Module):
 
 ### WildCat stuff
 
-from wildcat.pooling import WildcatPool2d, ClassWisePool
 
 class double_conv(nn.Module):
     '''(conv => BN => ReLU) * 2'''
@@ -444,11 +444,14 @@ class Upsample(nn.Module):
 
 
 # This model implements a GMM layer
-class GMMLayer(nn.Module):
+import time
+
+
+class GMMLayerSlow(nn.Module):
     
     def __init__(self):
         
-        super(GMMLayer, self).__init__()       
+        super(GMMLayerSlow, self).__init__()       
         
     def forward(self, Pij, I):
         """
@@ -471,7 +474,7 @@ class GMMLayer(nn.Module):
         
         # Epsilon to avoid divisions by zero
         eps = 1.0e-5
-        
+        t0 = time.perf_counter()
         # Epsilon matrix to add to the covariance matrix to avoid singularity
         eps_sigma = torch.eye(3, device=I.device).repeat(B,1,1) * 1e-3
 
@@ -489,6 +492,7 @@ class GMMLayer(nn.Module):
         elif torch.any(torch.isnan(sig)):
             print('Sigma has nans')
 
+        t1 = time.perf_counter()
         # Print the model parameters
         #for b in range(mu.shape[0]):
         #    for k in range(K):
@@ -507,33 +511,80 @@ class GMMLayer(nn.Module):
         
         if torch.any(torch.isnan(Pij_new)):
             print('Pij has nans')
-        
+
+        t2 = time.perf_counter()
+        # print('E %f   M %f', (t1-t0), (t2-t1))
+
         # Return the new posteriors
         return Pij_new
     
+
+class GMMLayer(nn.Module):
     
-    
+    def __init__(self, dim=3):
+        
+        super(GMMLayer, self).__init__()     
+        self.dim = dim 
+        
+    def forward(self, x, img):
+        """
+        The forward pass takes two inputs: the class posteriors x and the image img
+        Posterior x is of dimensions [N,K,W,H] where N is the minibatch size,
+        K is the number of classes, W and H are image dimensions. Image is of 
+        dimensions [N,C,W,H] where C is the number of channels.
+        
+        The output are new posteriors of the same dimension as the input posteriors
+        """
+        # Get all the dimensions
+        b,k,w,h = x.shape
+        d = img.shape[1]
+        
+        # Compute the weighted means and covariance matrices
+        t0 = time.perf_counter()
+        sx = torch.sum(x, (2,3))
+        eps = 1.e-5
+        eps_sigma = (torch.eye(d, device=img.device) * 1e-3).view(1,d,d,1)
+        
+        mu = torch.sum(img.view(b,d,1,w,h) * x.view(b,1,k,w,h), (3,4)) / (sx.view(b,1,k) + eps)
+        iz = img.view(b,d,1,w,h) - mu.view(b,d,k,1,1)
+        sig = torch.einsum('bkwhy,bxkwh->bxyk', 
+                           torch.einsum('bkwh,bykwh->bkwhy', x, iz), iz) / (eps + sx).view(b,1,1,k) + eps_sigma
+        alpha = sx / (w*h)
+
+        # Compute the new posteriors (again, avoid division by zero)
+        dd = torch.distributions.multivariate_normal.MultivariateNormal(mu.permute(0,2,1), 
+                                                                        sig.permute(0,3,1,2))
+        
+        y = alpha.view(b,k,1,1) * torch.exp(dd.log_prob(img.permute(2,3,0,1).view(w,h,b,1,d)).permute(2,3,0,1))
+        
+        y = y / (eps + y.sum(1,keepdim=True))
+        
+        # Return the new posteriors
+        return y
+
+
 # This model combines weakly supervised learning with a Gaussian mixture model
 class UNet_WSL_GMM(nn.Module):
 
-    def __init__(self, num_classes, mix_per_class=4, kmax=1, kmin=None, alpha=1):
+    def __init__(self, num_classes, mix_per_class=4, kmax=1, kmin=None, alpha=1, gmm_iter=10):
         super(UNet_WSL_GMM, self).__init__()
         
         # Store parameters
         self.mix_per_class = mix_per_class
         self.num_classes = num_classes
+        self.gmm_iter = gmm_iter
         
         # Create the u-net portion of the model
         self.unet = UNet(in_channels=3,
-                          out_channels=num_classes * mix_per_class,
-                          dim=2)
+                         out_channels=num_classes * mix_per_class,
+                         dim=2)
         
         # Create the softmax layer
         self.softmax = torch.nn.Softmax(dim=1)
         
         # Create the GMM layers
         self.gmm = []
-        for i in range(10):
+        for i in range(self.gmm_iter):
             self.gmm.append(GMMLayer())
             
         # Create the classwise pooling layer
@@ -581,3 +632,117 @@ class UNet_WSL_GMM(nn.Module):
         # z1 = self.classwise_pooling(Pij) * self.mix_per_class
         # z2 = self.spatial_pooling(z1)
         # return z2
+        
+        
+class GMMClassPoolingLayer(nn.Module):
+    """Custom layer that mixes GMM posteriors with linear weights"""
+    
+    def __init__(self, maps_per_class, num_classes, tunable_class_pooling):
+        super().__init__()
+        
+        w = torch.zeros(num_classes, sum(maps_per_class))
+        k = 0
+        for i in range(num_classes):
+            k_next = k + maps_per_class[i]
+            w[i,k:k_next] = 1.
+            k = k_next
+
+        self.weights = nn.Parameter(w, requires_grad=tunable_class_pooling)
+        self.bias = nn.Parameter(torch.zeros(num_classes), requires_grad=tunable_class_pooling)
+        
+    def forward(self, x):
+        return torch.einsum('bmwh,cm->bcwh', x, self.weights) + self.bias.view(1,-1,1,1)
+    
+
+# This model combines weakly supervised learning with a Gaussian mixture model
+class UNet_WSL_GMM_2(nn.Module):
+
+    def __init__(self, num_classes, mix_per_class=4, 
+                 kmax=1, kmin=None, alpha=1, gmm_iter=10, tunable_class_pooling=False):
+        """
+        Initialize the GMM UNet Wildcat model
+
+        Parameters:
+            num_classes: number of classes, of course
+            mix_per_class: mixtures per class, either a scalar or a list of size num_classes
+            kmax, kmin, alpha: wildcat parameters
+            gmm_iter: number of GMM iterations
+        """
+        super(UNet_WSL_GMM_2, self).__init__()
+        
+        # Store parameters
+        self.num_classes = num_classes
+
+        # Number of mixtures per class        
+        if isinstance(mix_per_class, int):
+            self.mix_per_class = [mix_per_class,] * num_classes
+        elif isinstance(mix_per_class, (list, tuple)):
+            self.mix_per_class = list(mix_per_class)
+        else:
+            raise ValueError("mix_per_class parameters should be int, list or tuple")
+
+        # Total number of mixtures
+        self.num_mixtures = sum(self.mix_per_class)
+
+        # GMM iterations
+        self.gmm_iter = gmm_iter
+        
+        # Create the u-net portion of the model
+        self.unet = UNet(in_channels=3,
+                         out_channels=self.num_mixtures,
+                         dim=2)
+        
+        # Create the softmax layer
+        self.softmax = torch.nn.Softmax(dim=1)
+        self.softmax_pooled = torch.nn.Softmax(dim=1) if tunable_class_pooling else None
+        
+        # Create the GMM layers
+        self.gmm = []
+        for i in range(self.gmm_iter):
+            self.gmm.append(GMMLayer())
+            
+        # Create the classwise pooling layer
+        self.classwise_pooling = GMMClassPoolingLayer(self.mix_per_class, num_classes, tunable_class_pooling)
+        
+        # Create the spatial pooling layer
+        self.spatial_pooling = WildcatPool2d(kmax, kmin, alpha)
+
+        # Add a conv layer
+        self.convtest = nn.Sequential(nn.Conv2d(3,8,3,padding=1), nn.Conv2d(8,3,3,padding=1))
+        
+    def forward_to_classifier(self, x):
+        
+        # Take the image through the u-net (result is a num_classes * mix_per_class stack of images)
+        Qij = self.unet(x)
+        
+        # Take the softmax of the posteriors
+        Pij = self.softmax(Qij)
+
+        # Pass the image through some filters
+        y = self.convtest(x)
+
+        # Pass the posteriors through the GMM
+        for j in range(len(self.gmm)):
+            Pij = self.gmm[j](Pij, y)
+            
+        # Return the class posteriors
+        return Pij
+        
+    def forward(self, x):
+        # Get the final per-class posteriors
+        Pij = self.forward_to_classifier(x)
+        
+        # Perform classwise pooling on the posteriors - mix them to get class activation maps
+        z1 = self.classwise_pooling(Pij)
+        
+        # Apply spatial pooling to the probabilities (take average of max-values)
+        z2 = self.spatial_pooling(z1)
+        
+        # Apply softmax to turn these to probabilities (only if using tunable pooling)
+        return self.softmax_pooled(z2) if self.softmax_pooled is not None else z2
+        
+        # Default code
+        # z1 = self.classwise_pooling(Pij) * self.mix_per_class
+        # z2 = self.spatial_pooling(z1)
+        # return z2
+ 

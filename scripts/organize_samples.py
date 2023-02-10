@@ -61,6 +61,9 @@ for li in label_info:
 # As we read the manifest, we will assign its elements to classes
 c_sam = { x['classname'] : [] for x in label_info }
 
+# Keep track of ignored classes
+c_ign = { x['classname'] : x['ignore'] > 0 for x in label_info }
+
 # Read the manifest file
 with open(os.path.join(args.workdir, 'manifest.csv'), 'rt') as f_manifest:
     reader = csv.DictReader(f_manifest, fieldnames=fld_manifest)
@@ -71,11 +74,9 @@ with open(os.path.join(args.workdir, 'manifest.csv'), 'rt') as f_manifest:
         for li in label_info:
             if any(lre.match(row['label']) for lre in li['re']):
                 s_class = li['classname']
-                s_ignore = li['ignore'] > 0
                 break
 
-        if s_ignore is False:
-            c_sam[s_class].append(row)
+        c_sam[s_class].append(row)
 
 # Table header
 print('%20s  %8s  %8s  %8s  %8s' % ('class','total','train','val','test'))
@@ -84,62 +85,67 @@ print('%20s  %8s  %8s  %8s  %8s' % ('-----','-----','-----','---','----'))
 # For each class, map samples to test, train, val
 for cls, sam in c_sam.items():
 
-    # Shuffle the samples
-    random.shuffle(sam)
-
     # Save the number of available samples
     n_total = len(sam)
 
+    # Shuffle the samples
+    random.shuffle(sam)
+
     # If test specimens are specified, the test set is filtered out
-    if len(test_specimens):
+    if c_ign[cls] is False:
+        if len(test_specimens):
 
-        # Select test samples
-        sam_test = list(filter(lambda x: x['specimen'] in test_specimens, sam))
-        n_test = nsam(len(sam_test), args.max_test)
-        sam_test = sam_test[:n_test]
+            # Select test samples
+            sam_test = list(filter(lambda x: x['specimen'] in test_specimens, sam))
+            n_test = nsam(len(sam_test), args.max_test)
+            sam_test = sam_test[:n_test]
 
-        # Select training samples
-        sam_tv = list(filter(lambda x: x['specimen'] not in test_specimens, sam))
-        n_train = nsam(int(len(sam_tv) * 0.67), args.max_train)
-        sam_train,sam_tv = sam_tv[:n_train], sam_tv[n_train:]
+            # Select training samples
+            sam_tv = list(filter(lambda x: x['specimen'] not in test_specimens, sam))
+            n_train = nsam(int(len(sam_tv) * 0.67), args.max_train)
+            sam_train,sam_tv = sam_tv[:n_train], sam_tv[n_train:]
 
-        # Select validation samples
-        n_val = nsam(len(sam_tv), args.max_val)
-        sam_val = sam_tv[:n_val]
+            # Select validation samples
+            n_val = nsam(len(sam_tv), args.max_val)
+            sam_val = sam_tv[:n_val]
+
+        else:
+
+            # Select training samples
+            n_train = nsam(len(sam) // 2, args.max_train)
+            sam_train,sam = sam[:n_train], sam[n_train:]
+
+            # Select validation samples
+            n_val = nsam(len(sam) // 2, args.max_val)
+            sam_val,sam = sam[:n_val], sam[n_val:]
+
+            # Select test samples
+            n_test = nsam(len(sam), args.max_test)
+            sam_test = sam[:n_test]
+
+        # Print statistics for this class
+        print('%20s  %8d  %8d  %8d  %8d' % (cls, n_total, len(sam_train), len(sam_val), len(sam_test)))
+
+        # Turn into a dictionary
+        sd = {'train': sam_train, 'val': sam_val, 'test': sam_test}
+
+        # Iterate over train, val, test
+        for fold, fsam in sd.items():
+
+            # Create the directory
+            wdir = os.path.join(args.workdir, args.expid, 'patches', fold, cls)
+            os.makedirs(wdir, exist_ok=True)
+
+            # Remove old links
+            for fn in glob.glob(os.path.join(wdir, '*.png')):
+                os.remove(fn)
+
+            # Create new links
+            for s in fsam:
+                os.symlink(
+                   '../../../../all_patches/%s.png' % s['id'],
+                   os.path.join(wdir, '%s.png' % s['id']))
 
     else:
+        print('%20s  %8d  %8d  %8d  %8d' % (cls, n_total, 0, 0, 0))
 
-        # Select training samples
-        n_train = nsam(len(sam) // 2, args.max_train)
-        sam_train,sam = sam[:n_train], sam[n_train:]
-
-        # Select validation samples
-        n_val = nsam(len(sam) // 2, args.max_val)
-        sam_val,sam = sam[:n_val], sam[n_val:]
-
-        # Select test samples
-        n_test = nsam(len(sam), args.max_test)
-        sam_test = sam[:n_test]
-
-    # Turn into a dictionary
-    sd = {'train': sam_train, 'val': sam_val, 'test': sam_test}
-
-    # Print statistics for this class
-    print('%20s  %8d  %8d  %8d  %8d' % (cls,n_total,len(sam_train),len(sam_val),len(sam_test)))
-
-    # Iterate over train, val, test
-    for fold, fsam in sd.items():
-
-        # Create the directory
-        wdir = os.path.join(args.workdir, args.expid, 'patches', fold, cls)
-        os.makedirs(wdir, exist_ok=True)
-
-        # Remove old links
-        for fn in glob.glob(os.path.join(wdir, '*.png')):
-            os.remove(fn)
-
-        # Create new links
-        for s in fsam:
-            os.symlink(
-               '../../../../all_patches/%s.png' % s['id'],
-               os.path.join(wdir, '%s.png' % s['id']))
