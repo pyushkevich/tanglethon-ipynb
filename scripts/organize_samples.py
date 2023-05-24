@@ -33,8 +33,7 @@ parser.add_argument('-T', '--max-test', type=int, default=0, metavar='N',
 parser.add_argument('-R', '--random-seed', type=int, default=0, metavar='N',
                     help='Random seed')
 parser.add_argument('-s', '--test-specimens', type=str, metavar='file',
-                    help=('File listing specimens ids to use for testing. These specimens ',
-                          'will not be included in training'))
+                    help='File listing specimens ids to use for testing. These specimens will not be included in training')
 args = parser.parse_args()
 
 # Fields in the manifest file
