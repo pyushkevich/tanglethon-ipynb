@@ -34,6 +34,8 @@ parser.add_argument('-R', '--random-seed', type=int, default=0, metavar='N',
                     help='Random seed')
 parser.add_argument('-s', '--test-specimens', type=str, metavar='file',
                     help='File listing specimens ids to use for testing. These specimens will not be included in training')
+parser.add_argument('-x', '--exclude-specimens', type=str, metavar='file',
+                    help='File listing specimens ids to exclude completely.')
 args = parser.parse_args()
 
 # Fields in the manifest file
@@ -48,6 +50,13 @@ if args.test_specimens is not None:
     with open(args.test_specimens, 'rt') as f_test_specimens:
         reader = csv.DictReader(f_test_specimens, fieldnames=['specimen'])
         test_specimens = set([row['specimen'] for row in reader])
+
+# Read the excluded specimen names
+exclude_specimens = set()
+if args.exclude_specimens is not None:
+    with open(args.exclude_specimens, 'rt') as f_exclude_specimens:
+        reader = csv.DictReader(f_exclude_specimens, fieldnames=['specimen'])
+        exclude_specimens = set([row['specimen'] for row in reader])
 
 # Read the label json
 with open(args.label_info, 'rt') as f_label_info:
@@ -67,6 +76,8 @@ c_ign = { x['classname'] : x['ignore'] > 0 for x in label_info }
 with open(os.path.join(args.workdir, 'manifest.csv'), 'rt') as f_manifest:
     reader = csv.DictReader(f_manifest, fieldnames=fld_manifest)
     for row in reader:
+        if row['id'] == 'id':
+            continue
 
         # Determine the class of the sample
         s_class = None
@@ -83,6 +94,10 @@ print('%20s  %8s  %8s  %8s  %8s' % ('-----','-----','-----','---','----'))
 
 # For each class, map samples to test, train, val
 for cls, sam in c_sam.items():
+
+    # Drop the samples from excluded specimens
+    if len(exclude_specimens):
+        sam = list(filter(lambda x: x['specimen'] not in exclude_specimens, sam))
 
     # Save the number of available samples
     n_total = len(sam)
@@ -120,7 +135,15 @@ for cls, sam in c_sam.items():
 
             # Select test samples
             n_test = nsam(len(sam), args.max_test)
-            sam_test = sam[:n_test]
+            sam_test,sam = sam[:n_test], sam[n_test:]
+
+            # Are there unused samples? If there is no cap on train,
+            # then add these to train
+            if n_train < args.max_train or args.max_train==0:
+                n_extra_train = len(sam) if args.max_train==0 else min(len(sam), args.max_train-n_train)
+                n_train = n_train + n_extra_train
+                sam_train = sam_train + sam[:n_extra_train]
+
 
         # Print statistics for this class
         print('%20s  %8d  %8d  %8d  %8d' % (cls, n_total, len(sam_train), len(sam_val), len(sam_test)))
